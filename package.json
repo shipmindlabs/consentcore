@@ -1,0 +1,25 @@
+{
+  "name": "consentcore",
+  "version": "0.0.0",
+  "description": "GDPR consent as state you can reason about: categories, a defensible record, and a gate that holds work back until the visitor has actually chosen.",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=22.18" },
+  "exports": { ".": "./src/index.ts" },
+  "files": ["src", "README.md", "LICENSE"],
+  "peerDependencies": { "react": ">=18" },
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "demo": "node example/demo.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.4",
+    "@types/react": "^19.2.7",
+    "@types/react-dom": "^19.2.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "typescript": "^7.0.2"
+  },
+  "keywords": ["gdpr", "consent", "cookies", "eprivacy", "react", "compliance"]
+}
