@@ -9,17 +9,21 @@ export {
   accept,
   acceptAll,
   allows,
+  asLog,
   CATEGORIES,
+  hashNotice,
   InvalidDecision,
   OPTIONAL_CATEGORIES,
   rejectAll,
   restore,
+  superseded,
   unset,
   withdraw,
   type Category,
   type Decision,
   type Options,
   type State,
+  type StoredConsent,
 } from "./consent.ts";
 
 export { Gate, type RunRecord } from "./gate.ts";

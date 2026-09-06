@@ -9,19 +9,26 @@ import {
   accept,
   acceptAll,
   allows,
+  asLog,
   rejectAll,
   restore,
+  superseded,
   withdraw,
   type Category,
   type Decision,
   type Options,
   type State,
+  type StoredConsent,
 } from "./consent.ts";
 
-/** Somewhere to keep the decision between visits. */
+/** Somewhere to keep the decisions between visits. */
 export type Store = {
-  read(): Decision | null;
-  write(decision: Decision | null): void;
+  read(): StoredConsent;
+  /**
+   * The whole log, not only the latest decision: a superseded answer is part of
+   * the record, and a store that keeps just the last one cannot show it.
+   */
+  write(log: readonly Decision[]): void;
 };
 
 /**
@@ -37,14 +44,14 @@ export function localStore(key = "consent"): Store {
     read() {
       try {
         const raw = globalThis.localStorage?.getItem(key);
-        return raw ? (JSON.parse(raw) as Decision) : null;
+        return raw ? (JSON.parse(raw) as StoredConsent) : null;
       } catch {
         return null;
       }
     },
-    write(decision) {
+    write(log) {
       try {
-        if (decision) globalThis.localStorage?.setItem(key, JSON.stringify(decision));
+        if (log.length) globalThis.localStorage?.setItem(key, JSON.stringify(log));
         else globalThis.localStorage?.removeItem(key);
       } catch {
         // Recorded nowhere, which the caller can see via `persisted`.
@@ -57,6 +64,10 @@ export type UseConsent = {
   readonly state: State;
   readonly pending: boolean;
   readonly decision: Decision | null;
+  /** Every decision made, oldest first, including ones a new notice replaced. */
+  readonly log: readonly Decision[];
+  /** The decision the current notice replaced, while it is unanswered. */
+  readonly superseded: Decision | null;
   /** Whether the decision reached storage. False means it will be asked again. */
   readonly persisted: boolean;
   allows(category: Category): boolean;
@@ -74,11 +85,11 @@ export function useConsent(options: Options & { store?: Store }): UseConsent {
   const commit = useCallback(
     (next: State) => {
       setState(next);
-      store.write(next.decision);
+      store.write(next.log);
       // Read it back: a write that silently did nothing is the case worth
       // knowing about, and it is cheap to check.
-      const stored = store.read();
-      setPersisted(stored?.at === next.decision?.at);
+      const stored = asLog(store.read()).at(-1);
+      setPersisted(stored?.at === next.log.at(-1)?.at);
     },
     [store],
   );
@@ -87,14 +98,16 @@ export function useConsent(options: Options & { store?: Store }): UseConsent {
     state,
     pending: state.pending,
     decision: state.decision,
+    log: state.log,
+    superseded: superseded(state),
     persisted,
     allows: useCallback((category: Category) => allows(state, category), [state]),
-    acceptAll: useCallback(() => commit(acceptAll(options)), [commit, options]),
-    rejectAll: useCallback(() => commit(rejectAll(options)), [commit, options]),
+    acceptAll: useCallback(() => commit(acceptAll(options, state)), [commit, options, state]),
+    rejectAll: useCallback(() => commit(rejectAll(options, state)), [commit, options, state]),
     accept: useCallback(
-      (categories: readonly Category[]) => commit(accept(categories, options)),
-      [commit, options],
+      (categories: readonly Category[]) => commit(accept(categories, options, state)),
+      [commit, options, state],
     ),
-    withdraw: useCallback(() => commit(withdraw(options)), [commit, options]),
+    withdraw: useCallback(() => commit(withdraw(options, state)), [commit, options, state]),
   };
 }

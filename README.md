@@ -19,9 +19,10 @@ visitor accepts statistics only
   ran     : session cookie, analytics
   waiting : ad pixel
 
-the notice text changes to a new version
+the notice text is edited; the version string is not
   old decision carried forward: false
   asked again                 : true
+  kept in the log             : custom at 2026-08-16T10:00:00.000Z
 ```
 
 ## The gate
@@ -47,6 +48,21 @@ ordering. Nothing runs twice however many decisions arrive. Work whose category
 is withdrawn is **dropped**, not kept waiting — holding it in case they change
 their mind is how a queue becomes a loophole.
 
+## The notice a decision answered
+
+Every decision records the notice version and a fingerprint of the notice text:
+
+```ts
+const options = { noticeVersion: "2026-08-01", noticeHash: hashNotice(noticeText) };
+```
+
+The version string is a promise someone has to remember to keep. The hash is
+checkable, and it catches the edit that changed what the notice said without
+changing what it was called. When either moves, `restore` returns to undecided
+and the banner is due again — while the answer that was superseded stays in
+`state.log`, where `superseded(state)` can find it. `hashNotice` is a change
+fingerprint (FNV-1a), not a security hash.
+
 ## Four refusals
 
 **Silence is not consent.** Before any decision only `necessary` is allowed.
@@ -54,8 +70,9 @@ Code that treats "not answered yet" as permission is the violation these banners
 exist to prevent.
 
 **An old notice does not answer a new question.** A decision recorded against a
-previous `noticeVersion` is not carried forward. The visitor agreed to what that
-version said.
+previous `noticeVersion` — or against text that has since been edited — is not
+carried forward, and it is not deleted either. The visitor agreed to what that
+version said, and the log has to be able to show it.
 
 **`necessary` is not a choice.** It is in the type as its own category and is
 granted whether or not it was passed, so no caller can accidentally make the
@@ -68,7 +85,7 @@ mind again.
 ## Use with React
 
 ```tsx
-const consent = useConsent({ noticeVersion: "2026-08-01" });
+const consent = useConsent({ noticeVersion: "2026-08-01", noticeHash: hashNotice(noticeText) });
 
 if (consent.pending) return <Notice onAccept={consent.acceptAll} onReject={consent.rejectAll} />;
 if (consent.allows("statistics")) { /* … */ }
@@ -77,7 +94,9 @@ if (consent.allows("statistics")) { /* … */ }
 The bundled store uses `localStorage` and never throws: private browsing, quota
 and a browser that blocks storage entirely are all ordinary. Losing the record
 is bad, but throwing inside a banner is worse, because then nobody can consent
-at all. `consent.persisted` tells you when the record did not stick.
+at all. `consent.persisted` tells you when the record did not stick. It keeps
+the whole log, not just the last answer, because a superseded decision is the
+part worth being able to show.
 
 ## What it is not
 
@@ -95,7 +114,7 @@ authority is a question for someone qualified to answer it.
 
 | | |
 |---|---|
-| Core | four categories, decision record with timestamp, notice version and method, restore, withdrawal |
+| Core | four categories, decision record with timestamp, notice version and hash, method, an append-only log, restore, withdrawal |
 | Gate | deferred side effects per category, ordered, once only, droppable |
 | React | `useConsent`, a storage-failure-tolerant `localStore`, tested with a real render |
 | Not yet | Google Consent Mode signals, a cookie-backed store for server rendering, per-vendor granularity, an audit export |
@@ -110,4 +129,4 @@ npm run typecheck
 
 ## License
 
-MIT
+MIT © [Shipmind Labs](https://shipmindlabs.com)

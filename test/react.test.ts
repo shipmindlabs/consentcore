@@ -8,16 +8,17 @@ import assert from "node:assert/strict";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { useConsent, type Store } from "../src/index.ts";
+import { hashNotice, useConsent, type Decision, type Store } from "../src/index.ts";
 
 const noticeVersion = "2026-08-01";
+const noticeHash = hashNotice("We use cookies to run the site and to count visits.");
 
 function memoryStore(): Store {
-  let held: Parameters<Store["write"]>[0] = null;
+  let held: readonly Decision[] = [];
   return {
     read: () => held,
-    write: (decision) => {
-      held = decision;
+    write: (log) => {
+      held = log;
     },
   };
 }
@@ -32,12 +33,14 @@ function brokenStore(): Store {
   };
 }
 
-function Banner({ store }: { store: Store }) {
-  const consent = useConsent({ noticeVersion, store });
+function Banner({ store, hash = noticeHash }: { store: Store; hash?: string }) {
+  const consent = useConsent({ noticeVersion, noticeHash: hash, store });
   return createElement("div", {
     "data-pending": String(consent.pending),
     "data-marketing": String(consent.allows("marketing")),
     "data-necessary": String(consent.allows("necessary")),
+    "data-logged": String(consent.log.length),
+    "data-superseded": String(consent.superseded?.method ?? "none"),
   });
 }
 
@@ -50,16 +53,41 @@ test("a fresh visitor sees the notice and has consented to nothing", () => {
 
 test("a stored decision is restored on the first render", () => {
   const store = memoryStore();
-  store.write({
-    granted: ["necessary", "marketing"],
-    at: "2026-08-16T10:00:00.000Z",
-    noticeVersion,
-    method: "custom",
-  });
+  store.write([
+    {
+      granted: ["necessary", "marketing"],
+      at: "2026-08-16T10:00:00.000Z",
+      noticeVersion,
+      noticeHash,
+      method: "custom",
+    },
+  ]);
 
   const html = renderToStaticMarkup(createElement(Banner, { store }));
   assert.match(html, /data-pending="false"/);
   assert.match(html, /data-marketing="true"/);
+});
+
+// A new notice is a new question, and the old answer stays on the record
+// rather than being carried over or quietly deleted.
+test("an edited notice asks again and keeps the previous decision", () => {
+  const store = memoryStore();
+  store.write([
+    {
+      granted: ["necessary", "marketing"],
+      at: "2026-08-16T10:00:00.000Z",
+      noticeVersion,
+      noticeHash,
+      method: "custom",
+    },
+  ]);
+
+  const hash = hashNotice("We use cookies to run the site, count visits and sell ads.");
+  const html = renderToStaticMarkup(createElement(Banner, { store, hash }));
+  assert.match(html, /data-pending="true"/);
+  assert.match(html, /data-marketing="false"/);
+  assert.match(html, /data-logged="1"/);
+  assert.match(html, /data-superseded="custom"/);
 });
 
 // Losing the record is bad. Throwing inside the banner is worse: then nobody

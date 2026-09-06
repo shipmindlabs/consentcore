@@ -5,16 +5,23 @@ import {
   accept,
   acceptAll,
   allows,
+  asLog,
   Gate,
+  hashNotice,
   InvalidDecision,
   rejectAll,
   restore,
+  superseded,
   unset,
   withdraw,
   type Options,
 } from "../src/index.ts";
 
-const options: Options = { noticeVersion: "2026-08-01", now: () => new Date("2026-08-16T10:00:00Z") };
+const options: Options = {
+  noticeVersion: "2026-08-01",
+  noticeHash: hashNotice("We use cookies to run the site and to count visits."),
+  now: () => new Date("2026-08-16T10:00:00Z"),
+};
 
 // Opt-in means opt-in. Code that treats "not answered yet" as permission is the
 // violation these banners exist to avoid.
@@ -63,25 +70,83 @@ test("withdrawing revokes everything and puts the notice back", () => {
   assert.equal(allows(after, "statistics"), false);
 });
 
+test("a decision records the notice it answered, version and text", () => {
+  const decision = acceptAll(options).decision;
+  assert.equal(decision?.noticeVersion, "2026-08-01");
+  assert.equal(decision?.noticeHash, options.noticeHash);
+});
+
+test("the fingerprint is stable for the same text and moves for an edit", () => {
+  assert.equal(hashNotice("same words"), hashNotice("same words"));
+  assert.notEqual(hashNotice("same words"), hashNotice("same words."));
+  assert.match(hashNotice(""), /^[0-9a-f]{16}$/);
+});
+
 // The visitor agreed to what that version of the notice said. A new version is
 // a new question.
-test("a decision against an older notice is not carried forward", () => {
+test("a decision against an older notice version is not carried forward", () => {
   const old = acceptAll({ ...options, noticeVersion: "2025-01-01" });
-  const restored = restore(old.decision, options);
+  const restored = restore(old.log, options);
 
   assert.equal(restored.pending, true);
   assert.equal(restored.decision, null);
   assert.equal(allows(restored, "marketing"), false);
 });
 
+// The version string is a promise someone has to remember to keep. The hash is
+// checkable, and it catches the edit that forgot.
+test("an edit to the notice text asks again even under the same version", () => {
+  const before = acceptAll(options);
+  const edited = { ...options, noticeHash: hashNotice("We use cookies, and we sell ads.") };
+  const restored = restore(before.log, edited);
+
+  assert.equal(restored.pending, true);
+  assert.equal(restored.decision, null);
+  assert.equal(allows(restored, "statistics"), false);
+});
+
+// Superseding an answer must not delete it: the log is the demonstrable part.
+test("a superseded decision stays in the log", () => {
+  const before = accept(["statistics"], options);
+  const restored = restore(before.log, { ...options, noticeVersion: "2026-09-01" });
+
+  assert.deepEqual(restored.log, before.log);
+  assert.equal(superseded(restored)?.method, "custom");
+  assert.equal(superseded(restored)?.noticeVersion, "2026-08-01");
+});
+
+test("a decision answering the current notice is not superseded", () => {
+  assert.equal(superseded(acceptAll(options)), null);
+  assert.equal(superseded(unset()), null);
+});
+
+test("decisions accumulate in the log, oldest first", () => {
+  let state = accept(["statistics"], options);
+  state = acceptAll(options, state);
+  state = withdraw(options, state);
+
+  assert.deepEqual(
+    state.log.map((entry) => entry.method),
+    ["custom", "accept-all", "withdrawn"],
+  );
+});
+
 test("a decision against the current notice is restored", () => {
-  const restored = restore(acceptAll(options).decision, options);
+  const restored = restore(acceptAll(options).log, options);
   assert.equal(restored.pending, false);
   assert.equal(allows(restored, "marketing"), true);
 });
 
+// Records written before the log existed held a single decision.
+test("a lone stored decision restores as a log of one", () => {
+  const restored = restore(acceptAll(options).decision, options);
+  assert.equal(restored.pending, false);
+  assert.equal(restored.log.length, 1);
+  assert.deepEqual(asLog(null), []);
+});
+
 test("a restored withdrawal asks again", () => {
-  const restored = restore(withdraw(options).decision, options);
+  const restored = restore(withdraw(options).log, options);
   assert.equal(restored.pending, true);
   assert.equal(allows(restored, "statistics"), false);
 });

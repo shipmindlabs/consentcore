@@ -4,14 +4,28 @@
  *   npm run demo
  */
 
-import { accept, acceptAll, allows, Gate, restore, unset, withdraw } from "../src/index.ts";
+import {
+  accept,
+  allows,
+  Gate,
+  hashNotice,
+  restore,
+  superseded,
+  unset,
+  withdraw,
+} from "../src/index.ts";
 
-const options = { noticeVersion: "2026-08-01", now: () => new Date("2026-08-16T10:00:00Z") };
+const now = () => new Date("2026-08-16T10:00:00Z");
+const august = {
+  noticeVersion: "2026-08-01",
+  noticeHash: hashNotice("We use cookies to run the site and to count visits."),
+  now,
+};
 const ran: string[] = [];
 
 console.log("visitor arrives, nothing decided");
 let state = unset();
-const gate = new Gate(state, options);
+const gate = new Gate(state, { now });
 gate.when("necessary", "session cookie", () => ran.push("session cookie"));
 gate.when("statistics", "analytics", () => ran.push("analytics"));
 gate.when("marketing", "ad pixel", () => ran.push("ad pixel"));
@@ -20,21 +34,27 @@ console.log(`  waiting : ${gate.pending.join(", ")}`);
 console.log(`  marketing allowed: ${allows(state, "marketing")}`);
 
 console.log("\nvisitor accepts statistics only");
-state = accept(["statistics"], options);
+state = accept(["statistics"], august, state);
 gate.update(state);
 console.log(`  ran     : ${ran.join(", ")}`);
 console.log(`  waiting : ${gate.pending.join(", ")}`);
 
-console.log("\nvisitor withdraws");
-state = withdraw(options);
-console.log(`  notice shown again: ${state.pending}`);
-console.log(`  statistics allowed: ${allows(state, "statistics")}`);
+console.log("\nthe notice text is edited; the version string is not");
+const edited = {
+  ...august,
+  noticeHash: hashNotice("We use cookies to run the site, count visits and sell ads."),
+};
+state = restore(state.log, edited);
+const previous = superseded(state);
+console.log(`  old decision carried forward: ${state.decision !== null}`);
+console.log(`  asked again                 : ${state.pending}`);
+console.log(`  kept in the log             : ${previous?.method} at ${previous?.at}`);
 
-console.log("\nthe notice text changes to a new version");
-const older = acceptAll(options).decision;
-const carried = restore(older, { ...options, noticeVersion: "2026-09-01" });
-console.log(`  old decision carried forward: ${carried.decision !== null}`);
-console.log(`  asked again                 : ${carried.pending}`);
+console.log("\nvisitor withdraws");
+state = withdraw(edited, state);
+console.log(`  notice shown again : ${state.pending}`);
+console.log(`  statistics allowed : ${allows(state, "statistics")}`);
+console.log(`  decisions on record: ${state.log.length}`);
 
 console.log("\nrecord of what ran");
 for (const entry of gate.ran) {
