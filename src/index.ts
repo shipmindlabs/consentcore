@@ -28,4 +28,18 @@ export {
 
 export { Gate, type RunRecord } from "./gate.ts";
 
+export {
+  chainHead,
+  GENESIS,
+  proof,
+  PROOF_FORMAT,
+  proofPreimage,
+  sha256,
+  verifyProof,
+  type Proof,
+  type ProofEntry,
+  type ProofProblem,
+  type Verification,
+} from "./proof.ts";
+
 export { localStore, useConsent, type Store, type UseConsent } from "./useConsent.ts";

@@ -63,6 +63,73 @@ and the banner is due again — while the answer that was superseded stays in
 `state.log`, where `superseded(state)` can find it. `hashNotice` is a change
 fingerprint (FNV-1a), not a security hash.
 
+## Proof export
+
+The log is append-only in memory, which is a promise this library makes to
+itself. A reviewer has no reason to accept it: a JSON file of decisions can be
+edited in any text editor, and nothing in its shape shows that it was. So the
+export chains each entry to the hash of the one before it.
+
+```ts
+writeFileSync("consent-proof.json", JSON.stringify(proof(state), null, 2));
+```
+
+```json
+{
+  "format": "consentcore/proof@1",
+  "entries": [
+    {
+      "index": 0,
+      "at": "2026-08-16T10:00:00.000Z",
+      "purposes": ["necessary", "statistics"],
+      "method": "custom",
+      "noticeVersion": "2026-08-01",
+      "noticeHash": "a1c1f39a4c52ebd8",
+      "previous": "0000000000000000000000000000000000000000000000000000000000000000",
+      "hash": "…"
+    }
+  ]
+}
+```
+
+The chain is derived, never stored: nothing new goes into `localStorage`, two
+exports of the same log are byte-identical, and anyone holding the log can
+recompute it. `verifyProof(JSON.parse(text))` re-runs the whole check —
+hashes, links, positions and timestamp order — and returns every problem it
+found with the entry it belongs to, rather than stopping at the first.
+
+The digest is SHA-256 over a preimage that is written down, so verifying an
+export needs nothing from this package:
+
+```js
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+
+const { format, entries } = JSON.parse(readFileSync("consent-proof.json", "utf8"));
+let previous = "0".repeat(64);
+
+for (const e of entries) {
+  const preimage = JSON.stringify([
+    format, e.index, e.at, e.method, e.purposes, e.noticeVersion, e.noticeHash, previous,
+  ]);
+  const hash = createHash("sha256").update(preimage).digest("hex");
+  if (hash !== e.hash || previous !== e.previous) throw new Error(`entry ${e.index}`);
+  previous = hash;
+}
+```
+
+A JSON array rather than a joined line, because every field in it comes from a
+caller: a `noticeVersion` containing a quote must not be able to pass itself
+off as two fields.
+
+**What a chain proves, and what it does not.** It makes an edit made in place
+visible: the entry stops matching its own hash, and every entry after it stops
+matching the chain. It cannot show a rewrite, because whoever holds the log can
+recompute all of it — that is true of any unsigned chain, whatever the digest.
+The way to close that gap is to put `chainHead(document)` somewhere the writer
+does not control: a receipt to the visitor, a line in a log shipped off the
+box, a hash recorded in a build artifact.
+
 ## Four refusals
 
 **Silence is not consent.** Before any decision only `necessary` is allowed.
@@ -96,7 +163,8 @@ and a browser that blocks storage entirely are all ordinary. Losing the record
 is bad, but throwing inside a banner is worse, because then nobody can consent
 at all. `consent.persisted` tells you when the record did not stick. It keeps
 the whole log, not just the last answer, because a superseded decision is the
-part worth being able to show.
+part worth being able to show — and `proof(consent.log)` is that log in a shape
+a reviewer can check.
 
 ## What it is not
 
@@ -115,9 +183,10 @@ authority is a question for someone qualified to answer it.
 | | |
 |---|---|
 | Core | four categories, decision record with timestamp, notice version and hash, method, an append-only log, restore, withdrawal |
+| Proof | the log as a SHA-256 chain, JSON export, an offline verifier that reports every problem it finds |
 | Gate | deferred side effects per category, ordered, once only, droppable |
 | React | `useConsent`, a storage-failure-tolerant `localStore`, tested with a real render |
-| Not yet | Google Consent Mode signals, a cookie-backed store for server rendering, per-vendor granularity, an audit export |
+| Not yet | Google Consent Mode signals, a cookie-backed store for server rendering, per-vendor granularity, a signature or external anchor over the chain head |
 
 ## Development
 
