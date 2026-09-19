@@ -48,6 +48,40 @@ ordering. Nothing runs twice however many decisions arrive. Work whose category
 is withdrawn is **dropped**, not kept waiting — holding it in case they change
 their mind is how a queue becomes a loophole.
 
+## Third-party tags
+
+Queued work is a one-shot side effect: it runs once and is over. A tag is not.
+It keeps running, and consent can move under it after it started — so tags are
+a registry rather than a queue.
+
+```ts
+const tags = new Tags(state);
+
+tags.register({ id: "analytics", purpose: "statistics", src: "https://cdn.example/a.js" });
+tags.register({
+  id: "pixel",
+  purpose: "marketing",
+  src: "https://cdn.example/p.js",
+  cleanup: () => { document.cookie = "_pxl=; Max-Age=0"; },
+});
+
+tags.update(accept(["statistics"], options));  // analytics goes on the page, the pixel does not
+tags.update(withdraw(options, state));         // the analytics element is taken off it
+```
+
+Held until there is a decision, released only for the purposes that decision
+granted, and on withdrawal **removed** — not left in place with
+`type="text/plain"` to be revived later, which keeps a refused vendor one line
+of unrelated code away from running. `cleanup` is where the cookie the tag set
+gets dealt with, because taking an element off the page does not undo what it
+already did.
+
+Elements carry `data-consent-tag` and `data-consent-purpose`, so a page can be
+inspected for what is running and under which answer. A later grant releases a
+removed tag again: that is a new answer to the same question, not a replay of
+the old one. `tags.history` is the record of both directions, and with no
+document — server rendering — mounting is a no-op rather than a crash.
+
 ## The notice a decision answered
 
 Every decision records the notice version and a fingerprint of the notice text:
@@ -185,8 +219,9 @@ authority is a question for someone qualified to answer it.
 | Core | four categories, decision record with timestamp, notice version and hash, method, an append-only log, restore, withdrawal |
 | Proof | the log as a SHA-256 chain, JSON export, an offline verifier that reports every problem it finds |
 | Gate | deferred side effects per category, ordered, once only, droppable |
+| Tags | third-party scripts held until a decision, released per purpose, removed and cleaned up when consent goes away |
 | React | `useConsent`, a storage-failure-tolerant `localStore`, tested with a real render |
-| Not yet | Google Consent Mode signals, a cookie-backed store for server rendering, per-vendor granularity, a signature or external anchor over the chain head |
+| Not yet | Google Consent Mode signals, a cookie-backed store for server rendering, a signature or external anchor over the chain head |
 
 ## Development
 

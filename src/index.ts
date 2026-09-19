@@ -29,6 +29,20 @@ export {
 export { Gate, type RunRecord } from "./gate.ts";
 
 export {
+  domHost,
+  DuplicateTag,
+  PURPOSE_ATTRIBUTE,
+  TAG_ATTRIBUTE,
+  Tags,
+  type Tag,
+  type TagDocument,
+  type TagElement,
+  type TagEvent,
+  type TagHost,
+  type TagRoot,
+} from "./tags.ts";
+
+export {
   chainHead,
   GENESIS,
   proof,
