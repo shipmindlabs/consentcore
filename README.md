@@ -82,6 +82,74 @@ removed tag again: that is a new answer to the same question, not a replay of
 the old one. `tags.history` is the record of both directions, and with no
 document — server rendering — mounting is a no-op rather than a crash.
 
+## Purposes and vendors
+
+A category is a coarse answer. "statistics" does not say which vendor gets the
+request, what they set, or where it goes. The list that does say it is usually
+prose, written three times — in the banner, in the cookie policy and in a
+record of processing — and the three drift apart. So it is declared once, as
+data:
+
+```ts
+const declaration = declare({
+  purposes: [
+    { id: "session", category: "necessary", name: "Keeping you signed in",
+      description: "A cookie that holds your session while you use the site." },
+    { id: "audience", category: "statistics", name: "Counting visits",
+      description: "Which pages are read, in aggregate." },
+    { id: "retargeting", category: "marketing", name: "Advertising",
+      description: "Showing you ads for this site on other sites." },
+  ],
+  vendors: [
+    { id: "acme-analytics", name: "Acme Analytics", purposes: ["audience"],
+      policy: "https://acme.example/privacy", cookies: ["_acme"], transfers: "US" },
+    { id: "adnet", name: "AdNet", purposes: ["audience", "retargeting"] },
+  ],
+});
+```
+
+`declare` checks it rather than trusting it: a vendor may only name purposes
+that exist, an id may only be used once, and a purpose with no description is
+refused, because a notice made of ids informs nobody. What comes back is plain
+data — it can be JSON, committed next to the code, diffed in review and
+published beside the notice.
+
+```ts
+allowsPurpose(declaration, state, "audience");        // true
+allowsVendor(declaration, state, "adnet");            // false: retargeting was not granted
+runnable(declaration, state);                         // ["acme-analytics"]
+vendorsFor(declaration, "audience");                  // both of them
+purposesOf(declaration, "adnet");                     // what it is on the page to do
+```
+
+A vendor whose purposes are only partly granted does not run partly — it does
+not run. Sending the request and leaving the vendor to honour the rest hands
+the visitor's decision to the party it was made about.
+
+The declaration is also what the notice is *about*, so it can be what the
+notice is fingerprinted from: `noticeHash: declarationHash(declaration)` means
+adding a vendor or rewriting a description asks everyone again. It is taken
+over the declaration sorted by id, so moving a line in the file is not an edit.
+
+### Refusing is the same call as accepting
+
+```ts
+grant(declaration,  ["audience"], options, state);
+refuse(declaration, ["audience"], options, state);
+```
+
+Same parameters, same order, same return value, same entry in the log. "As easy
+to withdraw as to give" is a property of the API before it is a property of the
+banner: a refusal that needed a different call, an extra argument or a
+confirmation step has already lost it, and no amount of button styling gets it
+back. A grant adds to what was already granted, a refusal takes away what it
+names, and `necessary` survives being named for the same reason `accept` adds
+it.
+
+A purpose is answered through its category, because a category is what a
+decision records. Two purposes under one category are one answer; purposes that
+need separate answers need separate categories.
+
 ## The notice a decision answered
 
 Every decision records the notice version and a fingerprint of the notice text:
@@ -205,8 +273,9 @@ a reviewer can check.
 **Not a banner.** No markup, no styles, no copy. Consent notices are
 design-system work and a library that ships one is always fought.
 
-**Not a vendor list or a TCF implementation.** No IAB framework, no vendor
-strings, no purposes taxonomy. Those are a different and much larger job.
+**Not the IAB TCF.** The purposes and vendors here are your own declaration, in
+your own words. There is no global vendor list, no consent string and no
+framework policy to be audited against; that is a different and much larger job.
 
 **Not legal advice.** It records decisions in a defensible shape. Whether your
 notice, your categories and your retention satisfy a particular supervisory
@@ -217,6 +286,7 @@ authority is a question for someone qualified to answer it.
 | | |
 |---|---|
 | Core | four categories, decision record with timestamp, notice version and hash, method, an append-only log, restore, withdrawal |
+| Declaration | purposes and vendors as plain data, checked on `declare`, a fingerprint over the declaration, per-purpose grant and refusal with one signature |
 | Proof | the log as a SHA-256 chain, JSON export, an offline verifier that reports every problem it finds |
 | Gate | deferred side effects per category, ordered, once only, droppable |
 | Tags | third-party scripts held until a decision, released per purpose, removed and cleaned up when consent goes away |

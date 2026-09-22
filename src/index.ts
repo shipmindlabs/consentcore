@@ -26,6 +26,25 @@ export {
   type StoredConsent,
 } from "./consent.ts";
 
+export {
+  allowsPurpose,
+  allowsVendor,
+  categoriesOf,
+  declarationHash,
+  declare,
+  grant,
+  InvalidDeclaration,
+  purpose,
+  purposesOf,
+  refuse,
+  runnable,
+  vendor,
+  vendorsFor,
+  type Declaration,
+  type Purpose,
+  type Vendor,
+} from "./registry.ts";
+
 export { Gate, type RunRecord } from "./gate.ts";
 
 export {
