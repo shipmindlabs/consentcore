@@ -75,4 +75,23 @@ export {
   type Verification,
 } from "./proof.ts";
 
-export { localStore, useConsent, type Store, type UseConsent } from "./useConsent.ts";
+export {
+  CONSENT_MONTHS,
+  COOKIE_LIMIT,
+  cookieStore,
+  expired,
+  expiresAt,
+  fresh,
+  localStore,
+  storageChannel,
+  type Channel,
+  type CookieJar,
+  type CookieStoreOptions,
+  type LocalStoreOptions,
+  type StorageEvent,
+  type StorageEventTarget,
+  type StorageLike,
+  type Store,
+} from "./storage.ts";
+
+export { useConsent, type UseConsent } from "./useConsent.ts";

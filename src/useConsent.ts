@@ -3,7 +3,7 @@
  * is where they can be tested without a renderer.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   accept,
@@ -18,47 +18,8 @@ import {
   type Decision,
   type Options,
   type State,
-  type StoredConsent,
 } from "./consent.ts";
-
-/** Somewhere to keep the decisions between visits. */
-export type Store = {
-  read(): StoredConsent;
-  /**
-   * The whole log, not only the latest decision: a superseded answer is part of
-   * the record, and a store that keeps just the last one cannot show it.
-   */
-  write(log: readonly Decision[]): void;
-};
-
-/**
- * A store backed by localStorage, written so that a blocked or full storage
- * does not take the page down with it.
- *
- * Storage failing is not exotic: private browsing, quota, and a browser
- * setting that blocks it entirely are all ordinary. Losing the record is bad;
- * throwing inside a banner is worse, because then nobody can consent at all.
- */
-export function localStore(key = "consent"): Store {
-  return {
-    read() {
-      try {
-        const raw = globalThis.localStorage?.getItem(key);
-        return raw ? (JSON.parse(raw) as StoredConsent) : null;
-      } catch {
-        return null;
-      }
-    },
-    write(log) {
-      try {
-        if (log.length) globalThis.localStorage?.setItem(key, JSON.stringify(log));
-        else globalThis.localStorage?.removeItem(key);
-      } catch {
-        // Recorded nowhere, which the caller can see via `persisted`.
-      }
-    },
-  };
-}
+import { localStore, type Store } from "./storage.ts";
 
 export type UseConsent = {
   readonly state: State;
@@ -81,6 +42,18 @@ export function useConsent(options: Options & { store?: Store }): UseConsent {
   const store = useMemo(() => options.store ?? localStore(), [options.store]);
   const [state, setState] = useState<State>(() => restore(store.read(), options));
   const [persisted, setPersisted] = useState(true);
+
+  // Held in a ref so a caller passing an options literal — which is every
+  // caller — does not resubscribe on every render.
+  const notice = useRef(options);
+  notice.current = options;
+
+  // A visitor with the site open twice who withdraws in one tab has withdrawn.
+  // The record is the shared one, so this tab follows it rather than keeping an
+  // answer that has already been changed.
+  useEffect(() => {
+    return store.subscribe?.(() => setState(restore(store.read(), notice.current)));
+  }, [store]);
 
   const commit = useCallback(
     (next: State) => {
