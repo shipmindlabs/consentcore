@@ -165,6 +165,51 @@ and the banner is due again — while the answer that was superseded stays in
 `state.log`, where `superseded(state)` can find it. `hashNotice` is a change
 fingerprint (FNV-1a), not a security hash.
 
+## Where the record is kept
+
+Two adapters, one shape:
+
+```ts
+const store = localStore();                              // the default
+const store = cookieStore({ domain: ".example.com" });   // when the server has to know
+```
+
+`localStorage` is the default: the record is read by the page that wrote it and
+by nothing else, and it rides on no request. A cookie is for the one case that
+cannot serve — a server-rendered first response that has to know what was
+chosen before any script has run — and it pays for that with bytes on every
+request.
+
+Both expire the record after thirteen months. Consent is not a signature
+collected once: someone who answered a notice a year and a half ago has not
+answered this one. Expiry is enforced on the way out as well as on the way in,
+and what has expired leaves the browser rather than sitting there unread,
+because a record outliving the answer is retention nobody asked for. The
+cookie's own `Max-Age` comes from the decision, so the browser expires it on the
+same schedule this code does and a tab left open for a year does not outlive it.
+
+```ts
+expiresAt(decision);   // "2027-09-16T10:00:00.000Z"
+expired(decision);     // false, until it is not
+```
+
+### Two open tabs
+
+A visitor with the site open twice who withdraws in one of them has withdrawn.
+Both stores expose `subscribe`, carried by the `storage` event: it reaches every
+other tab on the origin and never the one that wrote, which is exactly the shape
+wanted here. It is not a `BroadcastChannel` because storage is already present,
+already permitted, and already what the record is kept in. Writing a cookie
+fires no event at all, so `cookieStore` announces itself over a `localStorage`
+key that carries no record — `storageChannel`, which is also the seam a test
+stands in for.
+
+Neither store throws. Private browsing, quota and a browser setting that blocks
+storage entirely are all ordinary; losing the record is bad, but throwing inside
+a banner is worse, because then nobody can consent at all. A cookie over about
+4 KB is not rejected either — it is silently not set — so a log too big for one
+loses its oldest entries rather than the answer the visitor is living under.
+
 ## Proof export
 
 The log is append-only in memory, which is a promise this library makes to
@@ -260,13 +305,12 @@ if (consent.pending) return <Notice onAccept={consent.acceptAll} onReject={conse
 if (consent.allows("statistics")) { /* … */ }
 ```
 
-The bundled store uses `localStorage` and never throws: private browsing, quota
-and a browser that blocks storage entirely are all ordinary. Losing the record
-is bad, but throwing inside a banner is worse, because then nobody can consent
-at all. `consent.persisted` tells you when the record did not stick. It keeps
-the whole log, not just the last answer, because a superseded decision is the
-part worth being able to show — and `proof(consent.log)` is that log in a shape
-a reviewer can check.
+The bundled store is `localStore`, and a decision made in another tab arrives
+through it without the caller wiring anything up. `consent.persisted` tells you
+when the record did not stick. It keeps the whole log, not just the last answer,
+because a superseded decision is the part worth being able to show — and
+`proof(consent.log)` is that log in a shape a reviewer can check. Pass
+`store: cookieStore()` when the server has to read the answer too.
 
 ## What it is not
 
@@ -290,8 +334,9 @@ authority is a question for someone qualified to answer it.
 | Proof | the log as a SHA-256 chain, JSON export, an offline verifier that reports every problem it finds |
 | Gate | deferred side effects per category, ordered, once only, droppable |
 | Tags | third-party scripts held until a decision, released per purpose, removed and cleaned up when consent goes away |
-| React | `useConsent`, a storage-failure-tolerant `localStore`, tested with a real render |
-| Not yet | Google Consent Mode signals, a cookie-backed store for server rendering, a signature or external anchor over the chain head |
+| Storage | `localStorage` and cookie adapters, a thirteen-month expiry enforced on read and on write, cross-tab sync over the `storage` event |
+| React | `useConsent`, wired to a store and to the other tabs, tested with a real render |
+| Not yet | Google Consent Mode signals, a signature or external anchor over the chain head |
 
 ## Development
 
