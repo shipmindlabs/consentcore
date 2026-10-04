@@ -296,6 +296,73 @@ service unusable — or dishonestly reclassify tracking as essential.
 notice back on screen, rather than leaving someone with no way to change their
 mind again.
 
+## What a regulator asks for
+
+Two supervisory documents say in detail what the law above only implies: the
+CNIL's *délibération n° 2020-091* on trackers with the recommendation that
+accompanies it, and the DSK's *Orientierungshilfe für Anbieter von Telemedien*.
+They were written separately and agree on nearly everything, because they are
+both answering one question — what would the controller have to show. Here is
+where each of their demands lands.
+
+### Asking
+
+| Requirement | The call |
+|---|---|
+| Refusing is as available as accepting, in one action, on the first layer | `rejectAll(options, state)` — the same parameters as `acceptAll`, one entry in the log either way, from every state a banner can be in |
+| Silence is not consent: not scrolling, not continuing to browse, not waiting | `unset()` is where a visitor starts and `allows(state, category)` is false for everything but `necessary` until a decision exists |
+| Nothing pre-ticked: a category is granted because it was named | `accept(["statistics"], options)` grants what it names, plus `necessary`, and nothing beside it |
+| The visitor is told the purposes, the vendors, the cookies they set and where data goes — before deciding | the `declare({ purposes, vendors })` declaration: `description`, `cookies`, `transfers`, `policy`, checked rather than trusted |
+| Consent is specific per purpose rather than one switch | `grant(declaration, ["audience"], options, state)` and `refuse(declaration, ["audience"], options, state)` |
+| Withdrawal at any time, by means as simple as the consent | `withdraw(options, state)`, which also puts the notice back, so withdrawing is not a one-way door |
+| Nothing loads before the answer, and a refused vendor is gone rather than paused | `new Gate(state)` holds side effects; `new Tags(state)` holds scripts and removes the element on withdrawal |
+| A refusal is remembered, not re-asked on the next page view | a refusal is a decision: `restore` brings back `method: "reject-all"` with `pending` false, on the same thirteen-month window as a grant |
+| Technically necessary storage needs no consent | `necessary` is its own category, always granted — what belongs in it is a line of the declaration a reviewer reads, not something the API can decide |
+
+### Proving
+
+The export is the answer to "demonstrate it", and each thing both documents ask
+to see is a field of it.
+
+| Requirement | In the export |
+|---|---|
+| When the answer was given | `entries[].at`, ISO 8601 — and `verifyProof` reports a log whose timestamps run backwards |
+| What was agreed to | `entries[].purposes` |
+| How it was answered | `entries[].method`: `accept-all`, `reject-all`, `custom`, `withdrawn`. A refusal is on the record as a decision, not as an absence |
+| Against which notice, in which wording | `entries[].noticeVersion` and `entries[].noticeHash`; with `declarationHash(declaration)` the vendor list is part of what was fingerprinted |
+| That a withdrawal happened, and when | the entry with method `withdrawn`, with everything before it still there — superseding an answer never edits or drops it |
+| That the file was not edited afterwards | the `previous`/`hash` chain, `verifyProof(JSON.parse(text))`, and a preimage written down so the check needs nothing from this package |
+| That consent is not collected once and for all | `CONSENT_MONTHS` — thirteen, the figure the CNIL puts on both a tracker's life and an answer's, enforced on read and on write |
+
+```ts
+writeFileSync("consent-proof.json", JSON.stringify(proof(consent.log), null, 2));
+chainHead(proof(consent.log));   // the one value worth anchoring elsewhere
+```
+
+### What the mapping does not reach
+
+**Whether the two buttons look equally available.** Equal prominence is the
+requirement both documents spend the most words on, and it is styling: a
+library with no markup cannot meet it, and a library that shipped markup would
+be fought over instead of used.
+
+**The wording.** `declare` can refuse a purpose with no description. It cannot
+tell whether the description says what actually happens.
+
+**Whose consent it is.** The record is per browser and carries no identifier,
+by design — a banner that minted one would be processing to prove it had
+permission to process. Binding an entry to an account is the caller's, and
+"whose consent is this" is a question about that binding rather than about the
+chain.
+
+**Where the proof lives, and for how long.** The decision expires after
+thirteen months; an export taken to answer a complaint outlives the record it
+was taken from, and neither its storage nor its retention is something a
+browser library decides.
+
+And the caveat below still holds: this records decisions in a defensible shape,
+not an opinion about whether a particular authority is satisfied.
+
 ## Use with React
 
 ```tsx
