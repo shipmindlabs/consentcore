@@ -1,27 +1,29 @@
 /**
- * Third-party tags, registered against a purpose and held until the visitor
- * has decided.
+ * Third-party tags, registered against a category or a declared vendor and held
+ * until the visitor has decided.
  *
  * Queued work is a one-shot side effect: it runs once and is over. A tag is
  * not. It keeps running, and consent can move under it after it started, so
  * this is a registry rather than a queue. A tag stays registered whatever the
  * current answer is; what changes is whether it is on the page.
  *
- * When a purpose is refused or withdrawn the element is removed. The usual
- * shortcut — leaving the script in place with `type="text/plain"` and swapping
- * it back later — keeps a refused vendor one line of unrelated code away from
- * running, which is not what the visitor was told.
+ * When the answer it was gated on is refused or withdrawn the element is
+ * removed. The usual shortcut — leaving the script in place with
+ * `type="text/plain"` and swapping it back later — keeps a refused vendor one
+ * line of unrelated code away from running, which is not what the visitor was
+ * told.
  */
 
 import { allows, type Category, type State } from "./consent.ts";
+import { allowsVendor, InvalidDeclaration, vendor, type Declaration } from "./registry.ts";
 
 /** Written on every element this mounts, so a page can be inspected. */
 export const TAG_ATTRIBUTE = "data-consent-tag";
 export const PURPOSE_ATTRIBUTE = "data-consent-purpose";
+export const VENDOR_ATTRIBUTE = "data-consent-vendor";
 
-export type Tag = {
+type Common = {
   readonly id: string;
-  readonly purpose: Category;
   readonly src?: string;
   /** For vendors that hand over a block of code rather than a URL. */
   readonly inline?: string;
@@ -34,9 +36,26 @@ export type Tag = {
   readonly cleanup?: () => void;
 };
 
+/** Gated on a category, which is the coarse answer a decision records. */
+export type CategoryTag = Common & { readonly purpose: Category };
+
+/**
+ * Gated on a vendor from a declaration.
+ *
+ * A vendor on two purposes is answered by two categories, and a tag naming the
+ * vendor is released only while every one of them is granted. A partial grant
+ * keeps it off the page rather than loading it and leaving the vendor to honour
+ * the rest.
+ */
+export type VendorTag = Common & { readonly vendor: string };
+
+export type Tag = CategoryTag | VendorTag;
+
+/** Carries whichever of the two a tag was gated on, and never both. */
 export type TagEvent = {
   readonly id: string;
-  readonly purpose: Category;
+  readonly purpose?: Category;
+  readonly vendor?: string;
   readonly action: "released" | "revoked";
   readonly at: string;
 };
@@ -91,7 +110,8 @@ export function domHost(where: { document?: TagDocument; root?: TagRoot } = {}):
 
       const element = document.createElement("script");
       element.setAttribute(TAG_ATTRIBUTE, tag.id);
-      element.setAttribute(PURPOSE_ATTRIBUTE, tag.purpose);
+      if ("vendor" in tag) element.setAttribute(VENDOR_ATTRIBUTE, tag.vendor);
+      else element.setAttribute(PURPOSE_ATTRIBUTE, tag.purpose);
       for (const [name, value] of Object.entries(tag.attributes ?? {})) {
         element.setAttribute(name, value);
       }
@@ -113,10 +133,10 @@ export function domHost(where: { document?: TagDocument; root?: TagRoot } = {}):
 }
 
 /**
- * Tags and the purposes they were registered against.
+ * Tags and the answers they were registered against.
  *
- * Held until a decision, released only for the purposes that decision granted,
- * and removed when it is withdrawn or superseded. A later grant releases them
+ * Held until a decision, released only for what that decision granted, and
+ * removed when it is withdrawn or superseded. A later grant releases them
  * again, because that is a new answer to the same question rather than a replay
  * of the old one.
  */
@@ -124,14 +144,19 @@ export class Tags {
   #host: TagHost;
   #now: () => Date;
   #state: State;
+  #declaration: Declaration | undefined;
   #registry = new Map<string, Tag>();
   #live = new Set<string>();
   #history: TagEvent[] = [];
 
-  constructor(state: State, options: { host?: TagHost; now?: () => Date } = {}) {
+  constructor(
+    state: State,
+    options: { host?: TagHost; now?: () => Date; declaration?: Declaration } = {},
+  ) {
     this.#state = state;
     this.#host = options.host ?? domHost();
     this.#now = options.now ?? (() => new Date());
+    this.#declaration = options.declaration;
   }
 
   /** Registered, permitted, and on the page. */
@@ -139,7 +164,7 @@ export class Tags {
     return [...this.#live];
   }
 
-  /** Registered and waiting for a purpose that is not granted. */
+  /** Registered and waiting for an answer that has not been given. */
   get held(): readonly string[] {
     return [...this.#registry.keys()].filter((id) => !this.#live.has(id));
   }
@@ -150,15 +175,21 @@ export class Tags {
   }
 
   /**
-   * Register a tag. If its purpose is already granted it goes on the page at
-   * once, synchronously, so a caller can rely on ordering rather than a tick.
+   * Register a tag. If what it was gated on is already granted it goes on the
+   * page at once, synchronously, so a caller can rely on ordering rather than
+   * a tick.
+   *
+   * A vendor the declaration does not have is refused here rather than held for
+   * good: a tag that waits forever on a typo looks exactly like a tag waiting
+   * on a visitor.
    */
   register(tag: Tag): this {
     if (this.#registry.has(tag.id)) {
       throw new DuplicateTag(`a tag called "${tag.id}" is already registered`);
     }
+    if ("vendor" in tag) vendor(this.#declared(tag), tag.vendor);
     this.#registry.set(tag.id, tag);
-    if (allows(this.#state, tag.purpose)) this.#release(tag);
+    if (this.#permits(tag)) this.#release(tag);
     return this;
   }
 
@@ -169,7 +200,7 @@ export class Tags {
   update(state: State): this {
     this.#state = state;
     for (const tag of this.#registry.values()) {
-      const permitted = allows(state, tag.purpose);
+      const permitted = this.#permits(tag);
       if (permitted && !this.#live.has(tag.id)) this.#release(tag);
       if (!permitted && this.#live.has(tag.id)) this.#revoke(tag);
     }
@@ -183,6 +214,22 @@ export class Tags {
     this.#registry.delete(id);
     if (this.#live.has(id)) this.#revoke(tag);
     return this;
+  }
+
+  #permits(tag: Tag): boolean {
+    if ("vendor" in tag) {
+      return allowsVendor(this.#declared(tag), this.#state, tag.vendor);
+    }
+    return allows(this.#state, tag.purpose);
+  }
+
+  #declared(tag: VendorTag): Declaration {
+    if (!this.#declaration) {
+      throw new InvalidDeclaration(
+        `tag "${tag.id}" names the vendor "${tag.vendor}", but no declaration was given`,
+      );
+    }
+    return this.#declaration;
   }
 
   #release(tag: Tag): void {
@@ -199,11 +246,11 @@ export class Tags {
   }
 
   #record(tag: Tag, action: TagEvent["action"]): void {
-    this.#history.push({
-      id: tag.id,
-      purpose: tag.purpose,
-      action,
-      at: this.#now().toISOString(),
-    });
+    const at = this.#now().toISOString();
+    this.#history.push(
+      "vendor" in tag
+        ? { id: tag.id, vendor: tag.vendor, action, at }
+        : { id: tag.id, purpose: tag.purpose, action, at },
+    );
   }
 }

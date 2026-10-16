@@ -9,14 +9,19 @@ import assert from "node:assert/strict";
 import {
   accept,
   acceptAll,
+  declare,
   domHost,
   DuplicateTag,
+  grant,
   hashNotice,
+  InvalidDeclaration,
   PURPOSE_ATTRIBUTE,
+  refuse,
   restore,
   TAG_ATTRIBUTE,
   Tags,
   unset,
+  VENDOR_ATTRIBUTE,
   withdraw,
   type Options,
   type TagDocument,
@@ -28,6 +33,34 @@ const options: Options = {
   noticeHash: hashNotice("We use cookies to run the site and to count visits."),
   now: () => new Date("2026-08-16T10:00:00Z"),
 };
+
+const declaration = declare({
+  purposes: [
+    {
+      id: "session",
+      category: "necessary",
+      name: "Keeping you signed in",
+      description: "A cookie that holds your session while you use the site.",
+    },
+    {
+      id: "audience",
+      category: "statistics",
+      name: "Counting visits",
+      description: "Which pages are read, in aggregate.",
+    },
+    {
+      id: "retargeting",
+      category: "marketing",
+      name: "Advertising",
+      description: "Showing you ads for this site on other sites.",
+    },
+  ],
+  vendors: [
+    { id: "acme-analytics", name: "Acme Analytics", purposes: ["audience"] },
+    { id: "adnet", name: "AdNet", purposes: ["audience", "retargeting"] },
+    { id: "first-party", name: "This site", purposes: ["session"] },
+  ],
+});
 
 /** Enough of a page to tell whether a script is on it. */
 class FakeScript {
@@ -240,4 +273,64 @@ test("with no document there is nothing to mount, and nothing throws", () => {
   assert.deepEqual([...tags.live], ["pixel"]);
   tags.update(withdraw(options));
   assert.deepEqual([...tags.live], []);
+});
+
+// Half a grant is not half a vendor: loading it and leaving the vendor to
+// honour the rest hands the decision to the party it was made about.
+test("a vendor on two purposes stays held while only one of them is granted", () => {
+  const page = fakePage();
+  const tags = new Tags(unset(), { host: page.host, now: options.now, declaration });
+  tags.register({ id: "ads", vendor: "adnet", src: "https://cdn.example/ad.js" });
+  tags.register({ id: "stats", vendor: "acme-analytics", src: "https://cdn.example/a.js" });
+
+  const counted = grant(declaration, ["audience"], options);
+  tags.update(counted);
+
+  assert.deepEqual([...tags.live], ["stats"]);
+  assert.deepEqual([...tags.held], ["ads"]);
+  assert.deepEqual(ids(page.scripts), ["stats"]);
+  assert.equal(page.scripts[0].getAttribute(VENDOR_ATTRIBUTE), "acme-analytics");
+  assert.equal(page.scripts[0].getAttribute(PURPOSE_ATTRIBUTE), null);
+
+  tags.update(grant(declaration, ["retargeting"], options, counted));
+
+  assert.deepEqual([...tags.live], ["stats", "ads"]);
+  assert.deepEqual(ids(page.scripts), ["stats", "ads"]);
+});
+
+test("refusing one of a vendor's purposes takes it off the page, under its id", () => {
+  const page = fakePage();
+  const everything = acceptAll(options);
+  const tags = new Tags(everything, { host: page.host, now: options.now, declaration });
+  tags.register({ id: "ads", vendor: "adnet", src: "https://cdn.example/ad.js" });
+  assert.deepEqual(ids(page.scripts), ["ads"]);
+
+  tags.update(refuse(declaration, ["retargeting"], options, everything));
+
+  assert.deepEqual(page.scripts, []);
+  assert.deepEqual([...tags.held], ["ads"]);
+  assert.deepEqual(tags.history, [
+    { id: "ads", vendor: "adnet", action: "released", at: "2026-08-16T10:00:00.000Z" },
+    { id: "ads", vendor: "adnet", action: "revoked", at: "2026-08-16T10:00:00.000Z" },
+  ]);
+});
+
+test("a vendor that only processes for necessary purposes needs no answer", () => {
+  const page = fakePage();
+  const tags = new Tags(unset(), { host: page.host, now: options.now, declaration });
+  tags.register({ id: "site", vendor: "first-party", src: "https://cdn.example/s.js" });
+
+  assert.deepEqual([...tags.live], ["site"]);
+  assert.deepEqual(ids(page.scripts), ["site"]);
+});
+
+// A tag held for good by a typo looks exactly like a tag held for a visitor.
+test("a vendor the declaration does not have is refused at registration", () => {
+  const page = fakePage();
+  const tags = new Tags(unset(), { host: page.host, now: options.now, declaration });
+  assert.throws(() => tags.register({ id: "ads", vendor: "adnetwork" }), InvalidDeclaration);
+  assert.deepEqual([...tags.held], []);
+
+  const undeclared = new Tags(unset(), { host: page.host, now: options.now });
+  assert.throws(() => undeclared.register({ id: "ads", vendor: "adnet" }), InvalidDeclaration);
 });

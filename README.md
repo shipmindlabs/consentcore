@@ -82,6 +82,30 @@ removed tag again: that is a new answer to the same question, not a replay of
 the old one. `tags.history` is the record of both directions, and with no
 document — server rendering — mounting is a no-op rather than a crash.
 
+### A tag gated by a vendor
+
+A category is the answer a decision records; a vendor is what gets the request.
+Where the two come apart — a vendor processing for more than one purpose — the
+tag can name the vendor instead, and `Tags` reads the declaration:
+
+```ts
+const tags = new Tags(state, { declaration });
+
+tags.register({ id: "ads", vendor: "adnet", src: "https://cdn.example/ad.js" });
+
+tags.update(grant(declaration, ["audience"], options));            // held: adnet also needs retargeting
+tags.update(grant(declaration, ["retargeting"], options, state));  // now it goes on the page
+tags.update(refuse(declaration, ["audience"], options, state));    // and now it comes off again
+```
+
+Such a tag is on the page only while `allowsVendor` is true, so a partial grant
+keeps it off entirely and refusing any one of its purposes revokes it. The
+element carries `data-consent-vendor` instead of `data-consent-purpose`, and
+`tags.history` records the vendor id, because the vendor is what the tag was
+gated on. A vendor the declaration does not have is refused by `register`
+rather than held for good: a tag waiting on a typo looks exactly like a tag
+waiting on a visitor.
+
 ## Purposes and vendors
 
 A category is a coarse answer. "statistics" does not say which vendor gets the
@@ -315,7 +339,7 @@ where each of their demands lands.
 | The visitor is told the purposes, the vendors, the cookies they set and where data goes — before deciding | the `declare({ purposes, vendors })` declaration: `description`, `cookies`, `transfers`, `policy`, checked rather than trusted |
 | Consent is specific per purpose rather than one switch | `grant(declaration, ["audience"], options, state)` and `refuse(declaration, ["audience"], options, state)` |
 | Withdrawal at any time, by means as simple as the consent | `withdraw(options, state)`, which also puts the notice back, so withdrawing is not a one-way door |
-| Nothing loads before the answer, and a refused vendor is gone rather than paused | `new Gate(state)` holds side effects; `new Tags(state)` holds scripts and removes the element on withdrawal |
+| Nothing loads before the answer, and a refused vendor is gone rather than paused | `new Gate(state)` holds side effects; `new Tags(state)` holds scripts and removes the element on withdrawal, and a tag gated on a declared vendor stays off the page while any of that vendor's purposes is unanswered |
 | A refusal is remembered, not re-asked on the next page view | a refusal is a decision: `restore` brings back `method: "reject-all"` with `pending` false, on the same thirteen-month window as a grant |
 | Technically necessary storage needs no consent | `necessary` is its own category, always granted — what belongs in it is a line of the declaration a reviewer reads, not something the API can decide |
 
@@ -400,7 +424,7 @@ authority is a question for someone qualified to answer it.
 | Declaration | purposes and vendors as plain data, checked on `declare`, a fingerprint over the declaration, per-purpose grant and refusal with one signature |
 | Proof | the log as a SHA-256 chain, JSON export, an offline verifier that reports every problem it finds |
 | Gate | deferred side effects per category, ordered, once only, droppable |
-| Tags | third-party scripts held until a decision, released per purpose, removed and cleaned up when consent goes away |
+| Tags | third-party scripts held until a decision, released per category or per declared vendor, removed and cleaned up when consent goes away |
 | Storage | `localStorage` and cookie adapters, a thirteen-month expiry enforced on read and on write, cross-tab sync over the `storage` event |
 | React | `useConsent`, wired to a store and to the other tabs, tested with a real render |
 | Not yet | Google Consent Mode signals, a signature or external anchor over the chain head |

@@ -53,12 +53,15 @@ export {
   PURPOSE_ATTRIBUTE,
   TAG_ATTRIBUTE,
   Tags,
+  VENDOR_ATTRIBUTE,
+  type CategoryTag,
   type Tag,
   type TagDocument,
   type TagElement,
   type TagEvent,
   type TagHost,
   type TagRoot,
+  type VendorTag,
 } from "./tags.ts";
 
 export {
