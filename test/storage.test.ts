@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 
 import {
   acceptAll,
+  allows,
   asLog,
   CONSENT_MONTHS,
   cookieStore,
@@ -16,8 +17,10 @@ import {
   expiresAt,
   hashNotice,
   localStore,
+  readCookieHeader,
   restore,
   storageChannel,
+  superseded,
   withdraw,
   type Channel,
   type Decision,
@@ -314,4 +317,88 @@ test("with no document a cookie store reads nothing and writes nothing", () => {
 
   assert.equal(store.read(), null);
   assert.doesNotThrow(() => store.write(acceptAll(options).log));
+});
+
+// The whole reason to pay for a cookie: the first response knows the answer.
+test("what cookieStore wrote reads back on the server as the same state", () => {
+  const jar = fakeJar();
+  const store = cookieStore({ jar, now: options.now, channel: silent() });
+  const state = acceptAll(options);
+
+  store.write(state.log);
+  const server = readCookieHeader(jar.cookie, options);
+
+  assert.deepEqual(server, restore(store.read(), options));
+  assert.equal(server.pending, false);
+  assert.equal(server.decision?.method, "accept-all");
+  assert.deepEqual(server.log, state.log);
+  assert.equal(allows(server, "marketing"), true);
+});
+
+test("the key is found among whatever else the request carries", () => {
+  const jar = fakeJar();
+  jar.cookie = "_ga=GA1.1.2; Path=/";
+  const store = cookieStore({ jar, key: "cc", now: options.now, channel: silent() });
+  store.write(acceptAll(options).log);
+  jar.cookie = "session=abcdef; Path=/";
+  const header = jar.cookie;
+
+  assert.equal(readCookieHeader(header, { ...options, key: "cc" }).pending, false);
+  // Under the default name there is no record here at all.
+  assert.equal(readCookieHeader(header, options).pending, true);
+});
+
+// Expiry is one of the two rules, and it holds wherever the record is read.
+test("an answer past thirteen months is pending on the server too", () => {
+  const stale = decisionAt("2025-01-01T00:00:00.000Z");
+  const header = `consent=${encodeURIComponent(JSON.stringify([stale]))}`;
+
+  const state = readCookieHeader(header, options);
+
+  assert.equal(state.pending, true);
+  assert.equal(state.decision, null);
+  assert.deepEqual(state.log, []);
+  assert.equal(allows(state, "statistics"), false);
+});
+
+// And the other rule: a new notice is a new question, on the server as in the
+// browser, with the superseded answer still on the record.
+test("an answer to an older notice is pending on the server, and still in the log", () => {
+  const jar = fakeJar();
+  const store = cookieStore({ jar, now: options.now, channel: silent() });
+  store.write(acceptAll(options).log);
+
+  const state = readCookieHeader(jar.cookie, { ...options, noticeVersion: "2026-09-01" });
+
+  assert.equal(state.pending, true);
+  assert.equal(state.decision, null);
+  assert.equal(superseded(state)?.method, "accept-all");
+  assert.equal(allows(state, "marketing"), false);
+});
+
+// The value comes from the client, and the first response is the worst place to
+// throw. Undecided is the only safe reading of a record that cannot be read.
+test("a header nobody could have written reads as undecided, never as an error", () => {
+  const headers = [
+    "",
+    "consent",
+    "consent=",
+    "consent=not-json",
+    "consent=%E0%A4%A",
+    `consent=${encodeURIComponent("42")}`,
+    `consent=${encodeURIComponent('""')}`,
+    `consent=${encodeURIComponent("{}")}`,
+    `consent=${encodeURIComponent("[null]")}`,
+    `consent=${encodeURIComponent('[{"method":"custom"}]')}`,
+    `consent=${encodeURIComponent(JSON.stringify([decisionAt("whenever")]))}`,
+  ];
+
+  for (const header of headers) {
+    const state = readCookieHeader(header, options);
+    assert.equal(state.pending, true, header);
+    assert.equal(state.decision, null, header);
+  }
+
+  assert.equal(readCookieHeader(undefined, options).pending, true);
+  assert.equal(readCookieHeader(null, options).pending, true);
 });

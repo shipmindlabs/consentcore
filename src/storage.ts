@@ -13,7 +13,14 @@
  * something is retention nobody asked for.
  */
 
-import { asLog, type Decision, type StoredConsent } from "./consent.ts";
+import {
+  asLog,
+  restore,
+  type Decision,
+  type Options,
+  type State,
+  type StoredConsent,
+} from "./consent.ts";
 
 /** How long an answer stands before the question is asked again. */
 export const CONSENT_MONTHS = 13;
@@ -109,6 +116,25 @@ function parse(raw: string | null): StoredConsent {
   } catch {
     return null;
   }
+}
+
+/**
+ * One cookie's value, out of a `document.cookie` string or a request header —
+ * they are the same `name=value; name=value` shape, which is why the browser
+ * and the server can read the record with one piece of code.
+ */
+function cookieValue(header: string, key: string): string | null {
+  for (const pair of header.split(";")) {
+    const equals = pair.indexOf("=");
+    if (equals < 0 || pair.slice(0, equals).trim() !== key) continue;
+    try {
+      return decodeURIComponent(pair.slice(equals + 1).trim());
+    } catch {
+      // A truncated percent escape is a value nobody wrote.
+      return null;
+    }
+  }
+  return null;
 }
 
 /**
@@ -252,19 +278,6 @@ export function cookieStore(options: CookieStoreOptions = {}): Store {
     return parts.join("; ");
   };
 
-  const value = (): string | null => {
-    for (const pair of (jar()?.cookie ?? "").split(";")) {
-      const equals = pair.indexOf("=");
-      if (equals < 0 || pair.slice(0, equals).trim() !== key) continue;
-      try {
-        return decodeURIComponent(pair.slice(equals + 1).trim());
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  };
-
   const put = (log: readonly Decision[]): void => {
     const document = jar();
     if (!document) return;
@@ -293,7 +306,7 @@ export function cookieStore(options: CookieStoreOptions = {}): Store {
 
   return {
     read() {
-      const stored = parse(value());
+      const stored = parse(cookieValue(jar()?.cookie ?? "", key));
       const keep = fresh(stored, now(), months);
       if (keep.length !== asLog(stored).length) put(keep);
       return keep.length ? keep : null;
@@ -306,4 +319,33 @@ export function cookieStore(options: CookieStoreOptions = {}): Store {
 
     subscribe: (listener) => channel.subscribe(listener),
   };
+}
+
+export type CookieHeaderOptions = Options & {
+  /** The cookie name, matching the `cookieStore` that wrote it. */
+  readonly key?: string;
+  readonly months?: number;
+};
+
+/**
+ * The consent state a request's `Cookie` header carries.
+ *
+ * This is the thing a cookie can do that `localStorage` cannot: a first
+ * response that already knows the answer, so nothing has to be rendered as
+ * undecided and corrected once a script runs. It reaches the same state the
+ * browser does because it applies the same two rules in the same order — the
+ * thirteen-month window, then `restore` against the current notice.
+ *
+ * Pure, and nothing it is handed can make it throw. A header that is absent,
+ * truncated, hand-edited or not JSON at all reads as undecided: the value comes
+ * from the client, and undecided is the only safe reading of a record that
+ * cannot be read.
+ */
+export function readCookieHeader(
+  header: string | null | undefined,
+  options: CookieHeaderOptions,
+): State {
+  const stored = parse(cookieValue(header ?? "", options.key ?? "consent"));
+  const keep = fresh(stored, options.now?.() ?? new Date(), options.months ?? CONSENT_MONTHS);
+  return restore(keep.length ? keep : null, options);
 }

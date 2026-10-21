@@ -217,6 +217,32 @@ expiresAt(decision);   // "2027-09-16T10:00:00.000Z"
 expired(decision);     // false, until it is not
 ```
 
+### Reading it on the server
+
+Those bytes on every request buy one thing, so there is one call that spends
+them:
+
+```ts
+const consent = readCookieHeader(request.headers.get("cookie"), {
+  noticeVersion: "2026-08-01",
+  noticeHash: hashNotice(noticeText),
+});
+
+if (consent.pending) { /* render the notice, and nothing the notice is about */ }
+if (allows(consent, "statistics")) { /* … */ }
+```
+
+Pure — a header in, a `State` out — and it reaches the same state the browser
+does, because it applies the same two rules in the same order: the thirteen-month
+window, then `restore` against the current notice. An answer that has expired or
+that was given to an older notice is pending on the server as well, so the first
+response is not a page the banner then has to contradict.
+
+A header that is missing, truncated, hand-edited or not JSON at all reads as
+undecided rather than throwing. The value comes from the client, the first byte
+is the worst place to throw, and undecided is the only safe reading of a record
+that cannot be read.
+
 ### Two open tabs
 
 A visitor with the site open twice who withdraws in one of them has withdrawn.
@@ -340,7 +366,7 @@ where each of their demands lands.
 | Consent is specific per purpose rather than one switch | `grant(declaration, ["audience"], options, state)` and `refuse(declaration, ["audience"], options, state)` |
 | Withdrawal at any time, by means as simple as the consent | `withdraw(options, state)`, which also puts the notice back, so withdrawing is not a one-way door |
 | Nothing loads before the answer, and a refused vendor is gone rather than paused | `new Gate(state)` holds side effects; `new Tags(state)` holds scripts and removes the element on withdrawal, and a tag gated on a declared vendor stays off the page while any of that vendor's purposes is unanswered |
-| A refusal is remembered, not re-asked on the next page view | a refusal is a decision: `restore` brings back `method: "reject-all"` with `pending` false, on the same thirteen-month window as a grant |
+| A refusal is remembered, not re-asked on the next page view | a refusal is a decision: `restore` brings back `method: "reject-all"` with `pending` false, on the same thirteen-month window as a grant — and `readCookieHeader` reads it the same way before the first byte |
 | Technically necessary storage needs no consent | `necessary` is its own category, always granted — what belongs in it is a line of the declaration a reviewer reads, not something the API can decide |
 
 ### Proving
@@ -401,7 +427,8 @@ through it without the caller wiring anything up. `consent.persisted` tells you
 when the record did not stick. It keeps the whole log, not just the last answer,
 because a superseded decision is the part worth being able to show — and
 `proof(consent.log)` is that log in a shape a reviewer can check. Pass
-`store: cookieStore()` when the server has to read the answer too.
+`store: cookieStore()` when the server has to read the answer too, and read it
+there with `readCookieHeader`.
 
 ## What it is not
 
@@ -426,6 +453,7 @@ authority is a question for someone qualified to answer it.
 | Gate | deferred side effects per category, ordered, once only, droppable |
 | Tags | third-party scripts held until a decision, released per category or per declared vendor, removed and cleaned up when consent goes away |
 | Storage | `localStorage` and cookie adapters, a thirteen-month expiry enforced on read and on write, cross-tab sync over the `storage` event |
+| Server | `readCookieHeader`, a pure read of the `Cookie` header that reaches the same state the browser does |
 | React | `useConsent`, wired to a store and to the other tabs, tested with a real render |
 | Not yet | Google Consent Mode signals, a signature or external anchor over the chain head |
 
