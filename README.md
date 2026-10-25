@@ -323,9 +323,30 @@ off as two fields.
 visible: the entry stops matching its own hash, and every entry after it stops
 matching the chain. It cannot show a rewrite, because whoever holds the log can
 recompute all of it — that is true of any unsigned chain, whatever the digest.
-The way to close that gap is to put `chainHead(document)` somewhere the writer
-does not control: a receipt to the visitor, a line in a log shipped off the
-box, a hash recorded in a build artifact.
+
+### Anchors
+
+What a rewrite cannot recompute is a hash somebody else already wrote down. So
+the head goes somewhere the writer does not control — a receipt to the visitor,
+a line in a log shipped off the box, a value recorded in a build artifact — and
+comes back as an anchor the next export is checked against:
+
+```ts
+const kept = anchor(proof(state));   // { index: 2, hash: "…" }, or null while nothing is decided
+
+// later, against an export that arrives from somewhere else
+verifyProof(document);                       // the chain alone: a re-chained rewrite passes
+verifyProof(document, { anchors: [kept] });  // and fails here
+```
+
+An anchor whose entry is missing, or whose entry hashes differently, is reported
+with the index it was taken at, beside whatever the chain check found.
+`chainHead(document)` is the same hash on its own; the anchor carries the index
+too, so a document that is shorter than the anchor is a missing entry rather
+than a silent pass. Entries appended after it still satisfy it: an anchor pins
+everything up to its index and says nothing about what came later, which is why
+the head is the one worth keeping. An anchor that came back garbled — truncated
+in transit, or not a hash at all — is reported rather than counted as a pass.
 
 ## Four refusals
 
@@ -382,11 +403,12 @@ to see is a field of it.
 | Against which notice, in which wording | `entries[].noticeVersion` and `entries[].noticeHash`; with `declarationHash(declaration)` the vendor list is part of what was fingerprinted |
 | That a withdrawal happened, and when | the entry with method `withdrawn`, with everything before it still there — superseding an answer never edits or drops it |
 | That the file was not edited afterwards | the `previous`/`hash` chain, `verifyProof(JSON.parse(text))`, and a preimage written down so the check needs nothing from this package |
+| That it was not rewritten wholesale either | an `anchor(document)` kept where the writer cannot reach it, checked by `verifyProof(document, { anchors })` |
 | That consent is not collected once and for all | `CONSENT_MONTHS` — thirteen, the figure the CNIL puts on both a tracker's life and an answer's, enforced on read and on write |
 
 ```ts
 writeFileSync("consent-proof.json", JSON.stringify(proof(consent.log), null, 2));
-chainHead(proof(consent.log));   // the one value worth anchoring elsewhere
+anchor(proof(consent.log));   // { index, hash } — the value worth keeping elsewhere
 ```
 
 ### What the mapping does not reach
@@ -449,13 +471,13 @@ authority is a question for someone qualified to answer it.
 |---|---|
 | Core | four categories, decision record with timestamp, notice version and hash, method, an append-only log, restore, withdrawal |
 | Declaration | purposes and vendors as plain data, checked on `declare`, a fingerprint over the declaration, per-purpose grant and refusal with one signature |
-| Proof | the log as a SHA-256 chain, JSON export, an offline verifier that reports every problem it finds |
+| Proof | the log as a SHA-256 chain, JSON export, an offline verifier that reports every problem it finds, anchors checked against a head kept elsewhere |
 | Gate | deferred side effects per category, ordered, once only, droppable |
 | Tags | third-party scripts held until a decision, released per category or per declared vendor, removed and cleaned up when consent goes away |
 | Storage | `localStorage` and cookie adapters, a thirteen-month expiry enforced on read and on write, cross-tab sync over the `storage` event |
 | Server | `readCookieHeader`, a pure read of the `Cookie` header that reaches the same state the browser does |
 | React | `useConsent`, wired to a store and to the other tabs, tested with a real render |
-| Not yet | Google Consent Mode signals, a signature or external anchor over the chain head |
+| Not yet | Google Consent Mode signals, a signature over the chain head |
 
 ## Development
 

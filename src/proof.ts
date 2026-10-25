@@ -123,6 +123,24 @@ export type Proof = {
   readonly entries: readonly ProofEntry[];
 };
 
+/**
+ * A chain head kept somewhere the writer of the log does not control.
+ *
+ * A chain is tamper-evident, not tamper-proof: whoever holds the log can
+ * recompute every hash, so a rewrite of the whole file verifies. What a rewrite
+ * cannot recompute is a hash somebody else already wrote down — a receipt to
+ * the visitor, a line in a log shipped off the box, a value recorded in a build
+ * artifact. The index travels with the hash, so a document that no longer
+ * reaches that position is a missing entry rather than a silent pass.
+ *
+ * An anchor pins everything up to and including its index and says nothing
+ * about what comes after it, which is why the head is the one worth keeping.
+ */
+export type Anchor = {
+  readonly index: number;
+  readonly hash: string;
+};
+
 export type ProofProblem = {
   /** Which entry, or null when the document itself is the problem. */
   readonly index: number | null;
@@ -190,11 +208,29 @@ export function chainHead(document: Proof): string {
 }
 
 /**
+ * The head as an anchor to keep elsewhere.
+ *
+ * Null for an empty log: there is no entry to pin, and an anchor that can never
+ * fail is worse than none, because it is kept as though it were a safeguard.
+ */
+export function anchor(document: Proof): Anchor | null {
+  const head = document.entries.at(-1);
+  return head ? { index: head.index, hash: head.hash } : null;
+}
+
+/**
  * Check a parsed export. Takes `unknown` because the interesting case is a file
  * from somewhere else, and reports problems rather than throwing, since "which
  * entry, and what about it" is the answer a reviewer needs.
+ *
+ * `anchors` are heads kept outside the document. The chain alone cannot refuse
+ * a log that was rewritten and re-chained; an anchor can, because the hash was
+ * written down before the rewrite.
  */
-export function verifyProof(document: unknown): Verification {
+export function verifyProof(
+  document: unknown,
+  against: { anchors?: readonly Anchor[] } = {},
+): Verification {
   const problems: ProofProblem[] = [];
   const fail = (index: number | null, reason: string) => {
     problems.push({ index, reason });
@@ -234,6 +270,22 @@ export function verifyProof(document: unknown): Verification {
     previous = entry.hash;
   }
 
+  for (const candidate of against.anchors ?? []) {
+    const kept = asAnchor(candidate);
+    if (!kept) {
+      fail(null, `${JSON.stringify(candidate)} is not an anchor`);
+      continue;
+    }
+    const entry = asEntry(entries[kept.index]);
+    if (!entry) {
+      fail(kept.index, `the anchored entry is missing: this document holds ${entries.length}`);
+      continue;
+    }
+    if (entry.hash !== kept.hash) {
+      fail(kept.index, "entry does not match the anchor kept for it");
+    }
+  }
+
   return { ok: problems.length === 0, entries: entries.length, problems };
 }
 
@@ -249,4 +301,14 @@ function asEntry(raw: unknown): ProofEntry | null {
   if (!Array.isArray(entry.purposes)) return null;
   if (entry.purposes.some((purpose) => typeof purpose !== "string")) return null;
   return entry as unknown as ProofEntry;
+}
+
+/** An anchor comes back from wherever it was kept, which is not here either. */
+function asAnchor(raw: unknown): Anchor | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const candidate = raw as Record<string, unknown>;
+  if (typeof candidate.index !== "number" || !Number.isInteger(candidate.index)) return null;
+  if (candidate.index < 0) return null;
+  if (typeof candidate.hash !== "string" || !/^[0-9a-f]{64}$/.test(candidate.hash)) return null;
+  return { index: candidate.index, hash: candidate.hash };
 }

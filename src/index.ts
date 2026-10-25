@@ -65,6 +65,7 @@ export {
 } from "./tags.ts";
 
 export {
+  anchor,
   chainHead,
   GENESIS,
   proof,
@@ -72,6 +73,7 @@ export {
   proofPreimage,
   sha256,
   verifyProof,
+  type Anchor,
   type Proof,
   type ProofEntry,
   type ProofProblem,

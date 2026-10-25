@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import {
   accept,
   acceptAll,
+  anchor,
   chainHead,
   GENESIS,
   hashNotice,
@@ -19,6 +20,7 @@ import {
   unset,
   verifyProof,
   withdraw,
+  type Anchor,
   type Options,
   type Proof,
 } from "../src/index.ts";
@@ -179,6 +181,87 @@ test("a wholesale rewrite verifies, which is the limit of a chain", () => {
   assert.equal(verifyProof(rewritten).ok, true);
 });
 
+test("an untouched log passes the plain check and the anchor kept for it", () => {
+  const document = proof(threeDecisions());
+  const kept = anchor(document);
+
+  assert.ok(kept);
+  assert.deepEqual(kept, { index: 2, hash: chainHead(document) });
+  assert.deepEqual(verifyProof(document, { anchors: [kept] }), {
+    ok: true,
+    entries: 3,
+    problems: [],
+  });
+});
+
+// The head written down elsewhere is the one value a rewrite cannot recompute.
+test("an edited, re-chained log passes the plain check and fails against the anchor", () => {
+  const state = threeDecisions();
+  const kept = anchor(proof(state));
+  assert.ok(kept);
+
+  const rewritten = proof([
+    { ...state.log[0], granted: ["necessary", "marketing"] },
+    ...state.log.slice(1),
+  ]);
+
+  assert.equal(verifyProof(rewritten).ok, true);
+
+  const result = verifyProof(rewritten, { anchors: [kept] });
+  assert.equal(result.ok, false);
+  assert.deepEqual(
+    result.problems.map((problem) => problem.index),
+    [2],
+  );
+  assert.ok(result.problems[0].reason.includes("anchor"));
+});
+
+// An anchor is a claim about a position, so a log that no longer reaches it is
+// a missing entry rather than a silent pass.
+test("a log shorter than the anchor is reported as a missing entry", () => {
+  const state = threeDecisions();
+  const kept = anchor(proof(state));
+  assert.ok(kept);
+
+  const result = verifyProof(proof(state.log.slice(0, 2)), { anchors: [kept] });
+  assert.equal(result.ok, false);
+  assert.deepEqual(
+    result.problems.map((problem) => problem.index),
+    [2],
+  );
+  assert.ok(result.problems[0].reason.includes("missing"));
+});
+
+// An anchor pins what came before it, so appending to the log is not an edit.
+test("entries appended after an anchor still satisfy it", () => {
+  const state = threeDecisions();
+  const kept = anchor(proof(state));
+  assert.ok(kept);
+
+  assert.equal(verifyProof(proof(acceptAll(options, state)), { anchors: [kept] }).ok, true);
+});
+
+// The anchor comes back from wherever it was kept, which is not a place this
+// code controls either.
+test("an anchor that did not survive its round trip is reported, not trusted", () => {
+  const document = proof(threeDecisions());
+  const head = chainHead(document);
+  const bad: unknown[] = [
+    null,
+    head,
+    { index: 2 },
+    { hash: head },
+    { index: -1, hash: head },
+    { index: 1.5, hash: head },
+    { index: 2, hash: head.slice(0, 32) },
+  ];
+
+  for (const candidate of bad) {
+    const result = verifyProof(document, { anchors: [candidate as Anchor] });
+    assert.equal(result.ok, false, JSON.stringify(candidate));
+  }
+});
+
 test("a document that is not a proof is refused rather than trusted", () => {
   const bad: unknown[] = [
     null,
@@ -199,5 +282,8 @@ test("an empty log is an empty chain, not an error", () => {
 
   assert.deepEqual(document.entries, []);
   assert.equal(chainHead(document), GENESIS);
+  // Nothing to pin yet, and an anchor that can never fail would be kept as
+  // though it could.
+  assert.equal(anchor(document), null);
   assert.equal(verifyProof(document).ok, true);
 });
