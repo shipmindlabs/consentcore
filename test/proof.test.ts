@@ -1,10 +1,16 @@
 /**
  * The export a reviewer reads. The tests that matter here are the ones where
- * the file has been edited after the fact.
+ * the file has been edited after the fact, and the ones that hold the digest and
+ * the published verifier to something outside this package.
  */
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   accept,
@@ -38,11 +44,46 @@ function threeDecisions() {
   return state;
 }
 
+/** The answer a reviewer would get from the tool they already have. */
+const reference = (text: string): string =>
+  createHash("sha256").update(text, "utf8").digest("hex");
+
 /** A parsed export, editable the way a text editor can edit the file. */
 type Edited = { format: string; entries: Record<string, unknown>[] };
 
 function asEdited(document: Proof): Edited {
   return structuredClone(document) as unknown as Edited;
+}
+
+/**
+ * The verifier the README publishes, lifted out of the file rather than copied
+ * into this test: a snippet a reviewer is told to run has to be the one that
+ * runs, and a copy drifts the moment the document is edited.
+ */
+function documentedVerifier(): string {
+  const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+  const blocks = [...readme.matchAll(/```js\n([\s\S]*?)```/g)].map((match) => match[1]);
+  const found = blocks.filter((block) => block.includes('createHash("sha256")'));
+  assert.equal(found.length, 1, "the README publishes exactly one verifier");
+  return found[0];
+}
+
+/** Run it the way the README says to: a file on disk, read by a separate node. */
+function runVerifier(document: unknown): { ok: boolean; output: string } {
+  const directory = mkdtempSync(join(tmpdir(), "consentcore-proof-"));
+  try {
+    writeFileSync(join(directory, "verify.mjs"), documentedVerifier());
+    writeFileSync(join(directory, "consent-proof.json"), JSON.stringify(document, null, 2));
+    try {
+      execFileSync(process.execPath, ["verify.mjs"], { cwd: directory, stdio: "pipe" });
+      return { ok: true, output: "" };
+    } catch (failure) {
+      const stderr = (failure as { stderr?: Buffer }).stderr;
+      return { ok: false, output: stderr ? stderr.toString() : String(failure) };
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 }
 
 // If the digest is wrong, nothing else here means anything.
@@ -53,6 +94,37 @@ test("the digest matches the published SHA-256 vectors", () => {
     sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
     "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
   );
+});
+
+// A hand-rolled SHA-256 is wrong in exactly one place: around the block
+// boundary, where the 0x80 byte and the 64-bit length either fit in the last
+// block or force another one. 55 is the last message that fits, 56 is the first
+// that does not, and 63/64/65 straddle the block itself.
+test("the digest agrees with node:crypto at the padding boundaries", () => {
+  for (const length of [0, 55, 56, 63, 64, 65, 1000]) {
+    const message = "a".repeat(length);
+    assert.equal(sha256(message), reference(message), `${length} bytes`);
+  }
+});
+
+// The padding counts bytes; a notice counts characters. Text that is longer
+// encoded than written is where the two come apart, and a notice in German or
+// Japanese is the ordinary case rather than the exotic one.
+test("the digest pads by bytes rather than by characters", () => {
+  const texts = [
+    "é".repeat(27) + "a", // 55 bytes in 28 characters
+    "é".repeat(28), // 56 bytes in 28 characters
+    "€".repeat(21) + "a", // 64 bytes in 22 characters
+    "𝄞".repeat(16), // 64 bytes in 32 UTF-16 units
+    "Datenschutzerklärung — Übersicht über Dienste und Zwecke",
+    "このサイトはアクセス解析のためにクッキーを使用します。",
+  ];
+
+  for (const text of texts) {
+    const bytes = new TextEncoder().encode(text).length;
+    assert.notEqual(bytes, text.length, text);
+    assert.equal(sha256(text), reference(text), `${bytes} bytes`);
+  }
 });
 
 test("every decision becomes an entry linked to the one before it", () => {
@@ -92,6 +164,21 @@ test("an entry hash is a documented preimage anyone can recompute", () => {
       GENESIS,
     ]),
   );
+});
+
+// The documented preimage is only the real one while the published snippet
+// still accepts an export, so the snippet is run rather than read.
+test("the verifier printed in the README accepts an export", () => {
+  assert.deepEqual(runVerifier(proof(threeDecisions().log)), { ok: true, output: "" });
+});
+
+test("the verifier printed in the README names the entry that was edited", () => {
+  const document = asEdited(proof(threeDecisions().log));
+  document.entries[1].purposes = ["necessary"];
+
+  const result = runVerifier(document);
+  assert.equal(result.ok, false);
+  assert.match(result.output, /entry 1/);
 });
 
 test("the chain is derived, so the same log always exports the same bytes", () => {
