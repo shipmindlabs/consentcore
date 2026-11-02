@@ -10,11 +10,15 @@
  * Both expire the record after thirteen months. Consent is not a signature
  * collected once: someone who answered a notice a year and a half ago has not
  * answered this one, and a record kept past the point where it still means
- * something is retention nobody asked for.
+ * something is retention nobody asked for. The window itself is defined beside
+ * `restore`, which applies it to whatever a store hands back.
  */
 
 import {
   asLog,
+  CONSENT_MONTHS,
+  expired,
+  expiresAt,
   restore,
   type Decision,
   type Options,
@@ -22,8 +26,7 @@ import {
   type StoredConsent,
 } from "./consent.ts";
 
-/** How long an answer stands before the question is asked again. */
-export const CONSENT_MONTHS = 13;
+export { addMonths, CONSENT_MONTHS, expired, expiresAt } from "./consent.ts";
 
 /** Browsers drop a cookie larger than about 4 KB without saying so. */
 export const COOKIE_LIMIT = 4000;
@@ -68,27 +71,6 @@ function storageOf(given?: StorageLike): StorageLike | undefined {
 
 function eventsOf(given?: StorageEventTarget): StorageEventTarget | undefined {
   return given ?? (globalThis as unknown as { window?: StorageEventTarget }).window;
-}
-
-function addMonths(date: Date, months: number): Date {
-  const moved = new Date(date.getTime());
-  const day = moved.getUTCDate();
-  moved.setUTCMonth(moved.getUTCMonth() + months);
-  // The 31st of a month that has no 31st rolls forward on its own; rolling back
-  // to the last day of the intended month is the shorter window of the two.
-  if (moved.getUTCDate() !== day) moved.setUTCDate(0);
-  return moved;
-}
-
-/** When a decision stops being an answer. A timestamp nobody can read is over. */
-export function expiresAt(decision: Decision, months = CONSENT_MONTHS): string {
-  const at = Date.parse(decision.at);
-  if (Number.isNaN(at)) return new Date(0).toISOString();
-  return addMonths(new Date(at), months).toISOString();
-}
-
-export function expired(decision: Decision, now = new Date(), months = CONSENT_MONTHS): boolean {
-  return now.getTime() >= Date.parse(expiresAt(decision, months));
 }
 
 // Whatever a store hands back was a string a moment ago, in a place the visitor

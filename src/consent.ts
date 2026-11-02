@@ -89,6 +89,36 @@ export function hashNotice(text: string): string {
   return hash.toString(16).padStart(16, "0");
 }
 
+/**
+ * How long an answer stands before the question is asked again.
+ *
+ * The window lives here rather than with the stores, because it is a rule about
+ * the answer and not about where the answer was kept: a store that hands back a
+ * lapsed decision must not be able to revive it.
+ */
+export const CONSENT_MONTHS = 13;
+
+export function addMonths(date: Date, months: number): Date {
+  const moved = new Date(date.getTime());
+  const day = moved.getUTCDate();
+  moved.setUTCMonth(moved.getUTCMonth() + months);
+  // The 31st of a month that has no 31st rolls forward on its own; rolling back
+  // to the last day of the intended month is the shorter window of the two.
+  if (moved.getUTCDate() !== day) moved.setUTCDate(0);
+  return moved;
+}
+
+/** When a decision stops being an answer. A timestamp nobody can read is over. */
+export function expiresAt(decision: Decision, months = CONSENT_MONTHS): string {
+  const at = Date.parse(decision.at);
+  if (Number.isNaN(at)) return new Date(0).toISOString();
+  return addMonths(new Date(at), months).toISOString();
+}
+
+export function expired(decision: Decision, now = new Date(), months = CONSENT_MONTHS): boolean {
+  return now.getTime() >= Date.parse(expiresAt(decision, months));
+}
+
 /** Older records held a single decision; newer ones hold the whole log. */
 export function asLog(stored: StoredConsent): readonly Decision[] {
   if (!stored) return [];
@@ -120,12 +150,18 @@ export function unset(log: readonly Decision[] = []): State {
  * reusing the old answer is how "informed" stops being true. The superseded
  * decision stays in the log, because deleting it would lose the one thing the
  * record exists to prove.
+ *
+ * Nor is a decision past the thirteen-month window. The stores drop what has
+ * lapsed, but `Store` is a type callers implement, and one that keeps the
+ * record forever must not be able to keep an answer alive with it: someone who
+ * answered a notice a year and a half ago has not answered this one.
  */
 export function restore(stored: StoredConsent, options: Options): State {
   const log = asLog(stored);
   const latest = log.at(-1) ?? null;
   if (!latest) return unset(log);
   if (!answersCurrentNotice(latest, options)) return unset(log);
+  if (expired(latest, options.now?.() ?? new Date())) return unset(log);
   if (latest.method === "withdrawn") return { decision: latest, pending: true, log };
   return { decision: latest, pending: false, log };
 }

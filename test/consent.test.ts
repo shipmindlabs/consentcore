@@ -151,6 +151,35 @@ test("a restored withdrawal asks again", () => {
   assert.equal(allows(restored, "statistics"), false);
 });
 
+// A store is a type callers implement, and one that keeps the record forever
+// must not be able to keep the answer alive with it.
+test("a decision past the thirteen-month window restores as unanswered", () => {
+  const stale = { ...options, now: () => new Date("2024-01-01T10:00:00Z") };
+
+  for (const decide of [acceptAll, rejectAll]) {
+    const old = decide(stale);
+    const restored = restore(old.log, options);
+    const method = old.decision?.method ?? "none";
+
+    assert.equal(restored.pending, true, method);
+    assert.equal(restored.decision, null, method);
+    assert.equal(allows(restored, "marketing"), false, method);
+    assert.equal(restored.log.length, old.log.length, method);
+    assert.equal(superseded(restored)?.method, method);
+  }
+});
+
+test("a decision one second inside the window still restores", () => {
+  const stored = acceptAll(options).log;
+  const inside = restore(stored, { ...options, now: () => new Date("2027-09-16T09:59:59Z") });
+  assert.equal(inside.pending, false);
+  assert.equal(allows(inside, "marketing"), true);
+
+  const over = restore(stored, { ...options, now: () => new Date("2027-09-16T10:00:00Z") });
+  assert.equal(over.pending, true);
+  assert.equal(over.decision, null);
+});
+
 // The bug this gate replaces: an analytics snippet that loads on page one, and
 // a banner that appears a moment later.
 test("work waits for its category and then runs in order", () => {

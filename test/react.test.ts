@@ -24,6 +24,11 @@ const noticeVersion = "2026-08-01";
 const noticeHash = hashNotice("We use cookies to run the site and to count visits.");
 const editedHash = hashNotice("We use cookies to run the site, count visits and sell ads.");
 
+// Fixed, because the decisions here are stamped on a fixed date and an answer
+// stands for thirteen months: on a real clock these renders would start coming
+// back pending once that window ran out.
+const now = () => new Date("2026-08-16T10:00:00Z");
+
 function memoryStore(): Store {
   let held: readonly Decision[] = [];
   return {
@@ -57,7 +62,7 @@ function mount(store: Store, hash = noticeHash): Mounted {
   const rendered: UseConsent[] = [];
 
   function Banner() {
-    const consent = useConsent({ noticeVersion, noticeHash: hash, store });
+    const consent = useConsent({ noticeVersion, noticeHash: hash, now, store });
     rendered.push(consent);
     return createElement("div", {
       "data-pending": String(consent.pending),
